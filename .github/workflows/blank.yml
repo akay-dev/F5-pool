@@ -1,0 +1,99 @@
+# this has not been tested yet 
+
+import requests
+import json
+import logging
+import getpass
+from requests.auth import HTTPBasicAuth
+
+# Disable SSL warnings for self-signed certificates
+requests.packages.urllib3.disable_warnings()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Configuration
+F5_HOST = 'https://<F5_mgmt_ip>'
+
+# Functions
+def get_auth_token(username, password):
+    """
+    Obtain an authentication token from the F5 device.
+    """
+    url = f"{F5_HOST}/mgmt/shared/authn/login"
+    payload = {
+        'username': username,
+        'password': password,
+        'loginProviderName': 'tmos'
+    }
+    try:
+        response = requests.post(url, json=payload, verify=False)
+        response.raise_for_status()
+        token = response.json()['token']['token']
+        logging.info('Successfully obtained authentication token.')
+        return token
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error obtaining auth token: {e}")
+        return None
+
+def get_pool_members(pool_name, partition, token):
+    """
+    Get the status of all members in a pool.
+    """
+    headers = {'X-F5-Auth-Token': token}
+    url = f"{F5_HOST}/mgmt/tm/ltm/pool/~{partition}~{pool_name}/members"
+    try:
+        response = requests.get(url, headers=headers, verify=False)
+        response.raise_for_status()
+        members = response.json().get("items", [])
+        for member in members:
+            print(f"Member: {member['name']}, State: {member['state']}, Session: {member['session']}")
+        return members
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Failed to retrieve pool members: {e}")
+        return None
+
+def modify_pool_member(pool_name, member_name, action, partition, token):
+    """
+    Enable or disable a specific pool member.
+    """
+    headers = {'X-F5-Auth-Token': token}
+    url = f"{F5_HOST}/mgmt/tm/ltm/pool/~{partition}~{pool_name}/members/~{partition}~{member_name}"
+    payload = {"session": "user-enabled" if action == "enable" else "user-disabled"}
+    try:
+        response = requests.put(url, headers=headers, json=payload, verify=False)
+        response.raise_for_status()
+        logging.info(f"Successfully {action}d member: {member_name}")
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Failed to {action} member: {e}")
+
+# Main Function
+if __name__ == "__main__":
+    print("F5 LTM Pool Member Management")
+
+    # Interactive prompts for username and password
+    username = input("Enter your username: ")
+    password = getpass.getpass("Enter your password: ")
+
+    # Obtain authentication token
+    token = get_auth_token(username, password)
+    if not token:
+        print("Authentication failed. Exiting.")
+        exit(1)
+
+    print("1. Get Pool Member Status")
+    print("2. Enable Pool Member")
+    print("3. Disable Pool Member")
+    choice = input("Enter your choice (1/2/3): ")
+
+    pool_name = input("Enter the pool name: ")
+    partition = input("Enter the partition name (default: Common): ") or "Common"
+
+    if choice == "1":
+        get_pool_members(pool_name, partition, token)
+    elif choice in ["2", "3"]:
+        member_name = input("Enter the member name (IP:port): ")
+        action = "enable" if choice == "2" else "disable"
+        modify_pool_member(pool_name, member_name, action, partition, token)
+    else:
+        print("Invalid choice.")
